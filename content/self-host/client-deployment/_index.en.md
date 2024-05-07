@@ -13,10 +13,11 @@ The permanent password can be changed from random to one you prefer using by cha
 ### PowerShell
 
 ```ps
-$ErrorActionPreference= 'silentlycontinue'
+$ErrorActionPreference = 'silentlycontinue'
 
 # Assign the value random password to the password variable
-$rustdesk_pw=(-join ((65..90) + (97..122) | Get-Random -Count 12 | % {[char]$_}))
+Write-Output "Generating Password"
+$rustdesk_pw=(-join ((65..90) + (97..122) | Get-Random -Count 12 | ForEach-Object {[char]$_}))
 
 # Get your config string from your Web portal and Fill Below
 $rustdesk_cfg="configstring"
@@ -33,92 +34,57 @@ if (-Not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     }
 }
 
-# This function will return the latest version and download link as an object
-function getLatest()
-{
-    $Page = Invoke-WebRequest -Uri 'https://github.com/rustdesk/rustdesk/releases/latest' -UseBasicParsing
-    $HTML = New-Object -Com "HTMLFile"
-    try
-    {
-        $HTML.IHTMLDocument2_write($Page.Content)
-    }
-    catch
-    {
-        $src = [System.Text.Encoding]::Unicode.GetBytes($Page.Content)
-        $HTML.write($src)
-    }
-
-    # Current example link: https://github.com/rustdesk/rustdesk/releases/download/1.2.3/rustdesk-1.2.3-x86_64.exe
-    $Downloadlink = ($HTML.Links | Where {$_.href -match '(.)+\/rustdesk\/rustdesk\/releases\/download\/\d{1}.\d{1,2}.\d{1,2}(.{0,3})\/rustdesk(.)+x86_64.exe'} | select -first 1).href
-
-    # bugfix - sometimes you need to replace "about:"
-    $Downloadlink = $Downloadlink.Replace('about:', 'https://github.com')
-
-    $Version = "unknown"
-    if ($Downloadlink -match './rustdesk/rustdesk/releases/download/(?<content>.*)/rustdesk-(.)+x86_64.exe')
-    {
-        $Version = $matches['content']
-    }
-
-    if ($Version -eq "unknown" -or $Downloadlink -eq "")
-    {
-        Write-Output "ERROR: Version or download link not found."
-        Exit
-    }
-
-    # Create object to return
-    $params += @{Version = $Version}
-    $params += @{Downloadlink = $Downloadlink}
-    $Result = New-Object PSObject -Property $params
-    
-    return($Result)
-}
-
-$RustDeskOnGitHub = getLatest
-
-
 $rdver = ((Get-ItemProperty  "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\RustDesk\").Version)
 
-if ($rdver -eq $RustDeskOnGitHub.Version)
+Write-Output "Getting latest version and download url from Github repository"
+$repo = "rustdesk/rustdesk"
+$filenamePattern = "*x86_64.exe"
+$releasesUri = "https://api.github.com/repos/$repo/releases/latest"
+$downloadUri = ((Invoke-RestMethod -Method GET -Uri $releasesUri).assets | Where-Object name -like $filenamePattern ).browser_download_url
+$latestversion = (Invoke-RestMethod -Method GET -Uri $releasesUri).name
+
+if ($rdver -eq $latestversion)
 {
-    Write-Output "RustDesk $rdver is the newest version."
+    Write-Output "RustDesk $rdver is the newest version"
     Exit
 }
 
-if (!(Test-Path C:\Temp))
-{
-    New-Item -ItemType Directory -Force -Path C:\Temp > null
-}
+Set-Location "$env:TEMP"
 
-cd C:\Temp
+Write-Output "Downloading latest Rustdesk"
+Invoke-WebRequest $downloadUri -Outfile "rustdesk.exe"
 
-Invoke-WebRequest $RustDeskOnGitHub.Downloadlink -Outfile "rustdesk.exe"
+Write-Output "Installing Rustdesk"
 Start-Process .\rustdesk.exe --silent-install
-Start-Sleep -seconds 20
+Start-Sleep -Seconds 15
 
 $ServiceName = 'Rustdesk'
 $arrService = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 
-if ($arrService -eq $null)
+if ($null -eq $arrService)
 {
     Write-Output "Installing service"
-    cd $env:ProgramFiles\RustDesk
-    Start-Process .\rustdesk.exe --install-service
-    Start-Sleep -seconds 20
+    Set-Location "$env:ProgramFiles\RustDesk"
+    Start-Process .\rustdesk.exe --install-service -wait -Verbose
+    Start-Sleep -Seconds 20
 }
 
 while ($arrService.Status -ne 'Running')
 {
+    Write-Output "Starting service"
     Start-Service $ServiceName
-    Start-Sleep -seconds 5
+    Start-Sleep -Seconds 5
     $arrService.Refresh()
 }
 
-cd $env:ProgramFiles\RustDesk\
+Set-Location "$env:ProgramFiles\RustDesk\"
+Write-Output "Reading Rustdesk Id"
 .\rustdesk.exe --get-id | Write-Output -OutVariable rustdesk_id
 
+Write-Output "Start Rustdesk"
 .\rustdesk.exe --config $rustdesk_cfg
 
+Write-Output "Setting Rustdesk Password"
 .\rustdesk.exe --password $rustdesk_pw
 
 Write-Output "..............................................."
@@ -128,231 +94,4 @@ Write-Output "RustDesk ID: $rustdesk_id"
 # Show the value of the Password Variable
 Write-Output "Password: $rustdesk_pw"
 Write-Output "..............................................."
-```
-
-### Windows batch/cmd
-
-```bat
-@echo off
-
-REM Assign the value random password to the password variable
-setlocal ENABLEEXTENSIONS ENABLEDELAYEDEXPANSION
-set alfanum=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789
-set rustdesk_pw=
-for /L %%b in (1, 1, 12) do (
-    set /A rnd_num=!RANDOM! %% 62
-    for %%c in (!rnd_num!) do (
-        set rustdesk_pw=!rustdesk_pw!!alfanum:~%%c,1!
-    )
-)
-
-REM Get your config string from your Web portal and Fill Below
-set rustdesk_cfg="configstring"
-
-REM ############################### Please Do Not Edit Below This Line #########################################
-
-if not exist C:\Temp\ md C:\Temp\
-cd C:\Temp\
-
-curl -L "https://github.com/rustdesk/rustdesk/releases/download/1.2.3/rustdesk-1.2.3-x86_64.exe" -o rustdesk.exe
-
-rustdesk.exe --silent-install
-timeout /t 20
-
-cd "C:\Program Files\RustDesk\"
-rustdesk.exe --install-service
-timeout /t 20
-
-for /f "delims=" %%i in ('rustdesk.exe --get-id ^| more') do set rustdesk_id=%%i
-
-rustdesk.exe --config %rustdesk_cfg%
-
-rustdesk.exe --password %rustdesk_pw%
-
-echo ...............................................
-REM Show the value of the ID Variable
-echo RustDesk ID: %rustdesk_id%
-
-REM Show the value of the Password Variable
-echo Password: %rustdesk_pw%
-echo ...............................................
-```
-
-### macOS Bash
-
-```sh
-#!/bin/bash
-
-# Assign the value random password to the password variable
-rustdesk_pw=$(openssl rand -hex 4)
-
-# Get your config string from your Web portal and Fill Below
-rustdesk_cfg="configstring"
-
-################################### Please Do Not Edit Below This Line #########################################
-
-# Check if the script is being run as root
-if [[ $EUID -ne 0 ]]; then
-    echo "This script must be run as root."
-    exit 1
-fi
-
-# Specify the path to the rustdesk.dmg file
-dmg_file="/tmp/rustdesk-1.2.3-x86_64.dmg"
-
-# Specify the mount point for the DMG (temporary directory)
-mount_point="/Volumes/RustDesk"
-
-# Download the rustdesk.dmg file
-echo "Downloading RustDesk Now"
-
-if [[ $(arch) == 'arm64' ]]; then
-    curl -L https://github.com/rustdesk/rustdesk/releases/download/1.2.3/rustdesk-1.2.3-aarch64.dmg --output "$dmg_file"
-else
-    curl -L https://github.com/rustdesk/rustdesk/releases/download/1.2.3/rustdesk-1.2.3-x86_64.dmg --output "$dmg_file"
-fi
-
-# Mount the DMG file to the specified mount point
-hdiutil attach "$dmg_file" -mountpoint "$mount_point" &> /dev/null
-
-# Check if the mounting was successful
-if [ $? -eq 0 ]; then
-    # Move the contents of the mounted DMG to the /Applications folder
-    cp -R "$mount_point/RustDesk.app" "/Applications/" &> /dev/null
-
-    # Unmount the DMG file
-    hdiutil detach "$mount_point" &> /dev/null
-else
-    echo "Failed to mount the RustDesk DMG. Installation aborted."
-    exit 1
-fi
-
-# Run the rustdesk command with --get-id and store the output in the rustdesk_id variable
-cd /Applications/RustDesk.app/Contents/MacOS/
-rustdesk_id=$(./RustDesk --get-id)
-
-# Apply new password to RustDesk
-./RustDesk --server &
-/Applications/RustDesk.app/Contents/MacOS/RustDesk --password $rustdesk_pw &> /dev/null
-
-/Applications/RustDesk.app/Contents/MacOS/RustDesk --config $rustdesk_cfg
-
-# Kill all processes named RustDesk
-rdpid=$(pgrep RustDesk)
-kill $rdpid &> /dev/null
-
-echo "..............................................."
-# Check if the rustdesk_id is not empty
-if [ -n "$rustdesk_id" ]; then
-    echo "RustDesk ID: $rustdesk_id"
-else
-    echo "Failed to get RustDesk ID."
-fi
-
-# Echo the value of the password variable
-echo "Password: $rustdesk_pw"
-echo "..............................................."
-
-echo "Please complete install on GUI, launching RustDesk now."
-open -n /Applications/RustDesk.app
-```
-
-### Linux
-
-```sh
-#!/bin/bash
-
-# Assign a random value to the password variable
-rustdesk_pw=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 8 | head -n 1)
-
-# Get your config string from your Web portal and Fill Below
-rustdesk_cfg="configstring"
-
-################################### Please Do Not Edit Below This Line #########################################
-
-# Check if the script is being run as root
-if [[ $EUID -ne 0 ]]; then
-    echo "This script must be run as root."
-    exit 1
-fi
-
-# Identify OS
-if [ -f /etc/os-release ]; then
-    # freedesktop.org and systemd
-    . /etc/os-release
-    OS=$NAME
-    VER=$VERSION_ID
-
-    UPSTREAM_ID=${ID_LIKE,,}
-
-    # Fallback to ID_LIKE if ID was not 'ubuntu' or 'debian'
-    if [ "${UPSTREAM_ID}" != "debian" ] && [ "${UPSTREAM_ID}" != "ubuntu" ]; then
-        UPSTREAM_ID="$(echo ${ID_LIKE,,} | sed s/\"//g | cut -d' ' -f1)"
-    fi
-
-elif type lsb_release >/dev/null 2>&1; then
-    # linuxbase.org
-    OS=$(lsb_release -si)
-    VER=$(lsb_release -sr)
-elif [ -f /etc/lsb-release ]; then
-    # For some versions of Debian/Ubuntu without lsb_release command
-    . /etc/lsb-release
-    OS=$DISTRIB_ID
-    VER=$DISTRIB_RELEASE
-elif [ -f /etc/debian_version ]; then
-    # Older Debian, Ubuntu, etc.
-    OS=Debian
-    VER=$(cat /etc/debian_version)
-elif [ -f /etc/SuSE-release ]; then
-    # Older SuSE etc.
-    OS=SuSE
-    VER=$(cat /etc/SuSE-release)
-elif [ -f /etc/redhat-release ]; then
-    # Older Red Hat, CentOS, etc.
-    OS=RedHat
-    VER=$(cat /etc/redhat-release)
-else
-    # Fall back to uname, e.g. "Linux <version>", also works for BSD, etc.
-    OS=$(uname -s)
-    VER=$(uname -r)
-fi
-
-# Install RustDesk
-
-echo "Installing RustDesk"
-if [ "${ID}" = "debian" ] || [ "$OS" = "Ubuntu" ] || [ "$OS" = "Debian" ] || [ "${UPSTREAM_ID}" = "ubuntu" ] || [ "${UPSTREAM_ID}" = "debian" ]; then
-    wget https://github.com/rustdesk/rustdesk/releases/download/1.2.3/rustdesk-1.2.3-x86_64.deb
-    apt-get install -fy ./rustdesk-1.2.3-x86_64.deb > null
-elif [ "$OS" = "CentOS" ] || [ "$OS" = "RedHat" ] || [ "$OS" = "Fedora Linux" ] || [ "${UPSTREAM_ID}" = "rhel" ] || [ "$OS" = "Almalinux" ] || [ "$OS" = "Rocky*" ] ; then
-    wget https://github.com/rustdesk/rustdesk/releases/download/1.2.3/rustdesk-1.2.3-0.x86_64.rpm
-    yum localinstall ./rustdesk-1.2.3-0.x86_64.rpm -y > null
-else
-    echo "Unsupported OS"
-    # here you could ask the user for permission to try and install anyway
-    # if they say yes, then do the install
-    # if they say no, exit the script
-    exit 1
-fi
-
-# Run the rustdesk command with --get-id and store the output in the rustdesk_id variable
-rustdesk_id=$(rustdesk --get-id)
-
-# Apply new password to RustDesk
-rustdesk --password $rustdesk_pw &> /dev/null
-
-rustdesk --config $rustdesk_cfg
-
-systemctl restart rustdesk
-
-echo "..............................................."
-# Check if the rustdesk_id is not empty
-if [ -n "$rustdesk_id" ]; then
-    echo "RustDesk ID: $rustdesk_id"
-else
-    echo "Failed to get RustDesk ID."
-fi
-
-# Echo the value of the password variable
-echo "Password: $rustdesk_pw"
-echo "..............................................."
 ```
